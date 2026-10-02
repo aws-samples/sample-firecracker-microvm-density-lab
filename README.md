@@ -235,32 +235,20 @@ guidance, not code in this repository.**
   (`examples/dispatch/` shows the vsock client side). The off-host scheduler/state manager that
   routes rollout requests to nodes remains out of scope, as below.
 
-## Security and scope
+## Scope
 
-This repository runs **untrusted code** inside Firecracker microVMs. Each microVM is a
-hardware-virtualization boundary (KVM + the Firecracker jailer) and the guest is treated as
-hostile; the isolation controls the code enforces include vsock-only guests (no network
-device), Firecracker's seccomp-BPF filter left at its default, a per-microVM privilege drop
-(chroot, new PID namespace, distinct non-root UID/GID), per-microVM `memory.max` caps, and
-length-capped reads of all guest replies. To report a potential security issue, follow the
-process in [CONTRIBUTING.md](CONTRIBUTING.md) — notify AWS/Amazon Security via the
-[vulnerability reporting page](http://aws.amazon.com/security/vulnerability-reporting/) rather
-than opening a public issue.
-
-- **Single-tenant sandboxes.** Each microVM is a hardware-virtualization boundary
-  (KVM + Firecracker jailer) intended to run one tenant's untrusted workload. The design assumes
-  one workload per microVM; it does not multiplex mutually distrusting tenants inside a single
-  microVM.
-- **Least-privilege IAM.** The `cdk/` IAM stack scopes the instance role to what the lab
-  needs (SSM Session Manager and a scoped S3 policy for sweep results). Review and
-  tighten it for your environment before production use.
 - **This is reference code.** It is intended to illustrate the architecture from the blog post
   and to reproduce its measurements. It is **not thoroughly tested, secured, and optimized for
   production use**; review, test, and harden it before running production workloads. No warranty
   is provided; see [LICENSE](LICENSE).
+- **Least-privilege IAM.** The `cdk/` IAM stack scopes the instance role to what the lab
+  needs (SSM Session Manager and a scoped S3 policy for sweep results). Review and
+  tighten it for your environment before production use.
 - **Out of scope:** managed abstractions (SageMaker, managed node groups), the off-host
   scheduler/state manager, nested virtualization, and RL algorithm internals. The EKS/Karpenter
   production deployment is described above as guidance but not shipped as code.
+
+To report a potential security issue, see [SECURITY.md](SECURITY.md).
 
 ## Contributing
 
