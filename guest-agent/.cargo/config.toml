@@ -1,0 +1,10 @@
+# On a native Linux/musl host, the default linker produces a static binary with no extra
+# configuration. This file exists to document that the intended build host is Linux, and to
+# give a cross-build from macOS a fighting chance if the LLVM linker is installed
+# (brew install llvm, then the lld it ships).
+#
+# The authoritative build is on the metal host, matching how labctl and the shell scripts
+# are built. Cross-compiling from a workstation is a convenience, not the source of truth.
+[target.x86_64-unknown-linux-musl]
+# Uncomment on macOS if you have installed lld and want a local cross build:
+# linker = "/opt/homebrew/opt/llvm/bin/ld.lld"

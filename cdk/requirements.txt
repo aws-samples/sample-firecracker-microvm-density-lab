@@ -1,0 +1,9 @@
+# AWS CDK for the Firecracker microVM density lab.
+#
+# The CDK app provisions lab infrastructure only (VPC, IAM, and the metal
+# reference host launched from the custom golden AMI). Nothing density-critical
+# lives here: core pinning, NUMA placement, jailer configuration and cgroup
+# partition setup are in scripts/ (baked into the AMI) and host-agent/
+# (applied at runtime).
+aws-cdk-lib>=2.140,<3.0.0
+constructs>=10.0.0,<11.0.0

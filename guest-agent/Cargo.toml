@@ -1,0 +1,28 @@
+[package]
+name = "fc-guest-agent"
+version = "0.1.0"
+edition = "2021"
+description = "Minimal in-microVM agent: accepts a workload over vsock, runs it, reports timings"
+license = "MIT-0"
+
+[[bin]]
+name = "fc-guest-agent"
+path = "src/main.rs"
+
+[dependencies]
+# libc is the only dependency, and it is a thin declaration crate rather than a library: it
+# contributes type and constant definitions, not code. std links against libc regardless, so
+# this adds effectively nothing to the binary.
+#
+# Everything else is std. The agent is resident in every microVM and its resident set lands
+# in every snapshot memory file, so at 150 to 180 microVMs each megabyte is multiplied by the
+# fleet size. A vsock convenience crate would not earn that cost when the socket calls are a
+# few dozen lines.
+libc = { version = "0.2", default-features = false }
+
+[profile.release]
+opt-level = "z"   # optimise for size, not speed: the agent is not the hot path
+lto = true
+codegen-units = 1
+panic = "abort"   # unwinding tables cost size and a panicking agent should just die
+strip = true
