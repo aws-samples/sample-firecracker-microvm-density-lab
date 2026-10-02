@@ -1,0 +1,53 @@
+# systemd unit for the Firecracker microVM density Host Agent.
+#
+# The Host Agent runs directly on the metal host as a root service: it
+# manipulates the host cpuset cgroup partition tree (not delegatable to an
+# unprivileged process), launches Firecracker jailer processes, and kills them
+# by PID on drain. The AMI bake (scripts/bake-lab-ami.sh) stages the binary at
+# /usr/local/bin/host-agent and installs this unit; enable it on hosts that
+# serve dispatch traffic. Density sweeps (lab/cmd/labsweep) launch their own
+# microVMs and do not need the agent running -- stop it before a sweep so the
+# two do not fight over the cgroup tree:
+#
+#   sudo systemctl stop host-agent
+#
+# In production on EKS the same binary runs as a privileged DaemonSet instead;
+# see the repo README "Production deployment" section.
+#
+# Tune the flags for your host and workload; they are the same flags
+# documented in host-agent/README.md. -instance-type is informational and
+# gates SMT-requiring configs (C/E/F) with a clear error on AMD hosts.
+
+[Unit]
+Description=Firecracker microVM density Host Agent
+Documentation=https://github.com/aws-samples/sample-firecracker-microvm-density-lab
+After=network-online.target
+Wants=network-online.target
+# The jailer chroot base and staged artifacts come from the AMI bake.
+ConditionPathExists=/opt/firecracker/vmlinux
+ConditionPathExists=/opt/firecracker/rootfs.ext4
+
+[Service]
+Type=simple
+# SWEEP_S3_BUCKET and other lab wiring, written by the CDK LabHost user data.
+EnvironmentFile=-/etc/firecracker-lab/env
+ExecStart=/usr/local/bin/host-agent \
+    -config=D \
+    -density=96 \
+    -warm-pool-size=16 \
+    -metrics-addr=127.0.0.1:9090 \
+    -kernel=/opt/firecracker/vmlinux \
+    -rootfs=/opt/firecracker/rootfs.ext4
+Restart=on-failure
+RestartSec=5
+# On stop the agent drains the warm pool and tears down its cgroup hierarchy;
+# give it the same 60s grace the DaemonSet spec allowed before SIGKILL.
+TimeoutStopSec=60
+KillMode=mixed
+# The agent's own threads live on the host-reserve cores the placement plan
+# carves out; no CPU accounting limits here or they would throttle cgroup
+# management.
+OOMScoreAdjust=-500
+
+[Install]
+WantedBy=multi-user.target

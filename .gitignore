@@ -1,0 +1,47 @@
+# ---- Python / AWS CDK (cdk/) ----
+.venv/
+venv/
+env/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+cdk.out/
+cdk.context.json
+
+# ---- Go (host-agent/, lab/) ----
+bin/
+*.exe
+*.test
+*.out
+coverage.out
+coverage.html
+# compiled example dispatch binary
+examples/dispatch/dispatch
+
+# ---- Rust (guest-agent/) ----
+target/
+
+# ---- microVM image / snapshot build artifacts ----
+# Kernels, root filesystems, snapshots, and memory files produced by the
+# scripts/ image-bake and Firecracker snapshot tooling. These are large binary
+# build outputs and are never committed.
+*.ext4
+*.img
+*.rootfs
+*.squashfs
+vmlinux
+vmlinux-*
+bzImage
+*.snapshot
+*.mem
+*.state
+
+# ---- editors / OS ----
+.DS_Store
+*.swp
+.idea/
+.vscode/

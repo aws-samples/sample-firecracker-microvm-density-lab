@@ -1,0 +1,113 @@
+# CI for the Firecracker microVM density lab.
+#
+# Builds every component a fresh clone must be able to build without hardware:
+# the Go modules (lab, host-agent, examples/dispatch), the Rust guest agent as a
+# static musl binary, the CDK app (compile + environment-agnostic synth), and a
+# syntax pass over the shell scripts. Anything that needs /dev/kvm, root, or a
+# metal host is exercised by the lab itself, not here — the hardware-gated tests
+# skip cleanly off-metal by design.
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  go:
+    name: Go (lab, host-agent, dispatch)
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        module: [lab, host-agent, examples/dispatch]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.23"
+          cache-dependency-path: ${{ matrix.module }}/go.sum
+      - name: gofmt
+        working-directory: ${{ matrix.module }}
+        run: test -z "$(gofmt -l .)" || { gofmt -l .; exit 1; }
+      - name: build
+        working-directory: ${{ matrix.module }}
+        run: go build ./...
+      - name: vet
+        working-directory: ${{ matrix.module }}
+        run: go vet ./...
+      - name: test
+        working-directory: ${{ matrix.module }}
+        run: go test ./...
+
+  guest-agent:
+    name: Rust guest agent (x86_64 musl, static)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: install musl target
+        run: rustup target add x86_64-unknown-linux-musl
+      - name: build
+        working-directory: guest-agent
+        run: cargo build --release --target x86_64-unknown-linux-musl
+      - name: verify static PID-1 binary
+        working-directory: guest-agent
+        run: |
+          BIN=target/x86_64-unknown-linux-musl/release/fc-guest-agent
+          file "$BIN"
+          # PID 1 in a microVM must not depend on a dynamic loader.
+          file "$BIN" | grep -Eq 'statically linked|static-pie linked'
+
+  cdk:
+    name: CDK synth (env-agnostic)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: install
+        working-directory: cdk
+        run: pip install -r requirements.txt
+      - name: compile
+        working-directory: cdk
+        run: python -m py_compile app.py stacks/*.py
+      - name: synth (default m8i)
+        working-directory: cdk
+        run: npx aws-cdk@2 synth --all --quiet -o /tmp/cdk-m8i
+      - name: synth (m8a variant)
+        working-directory: cdk
+        run: npx aws-cdk@2 synth --all --quiet -c instanceType=m8a.metal-48xl -o /tmp/cdk-m8a
+
+  shell:
+    name: Shell script checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: bash -n
+        run: |
+          for f in scripts/*.sh scripts/lib/*.sh guest-agent/build.sh; do
+            bash -n "$f" || exit 1
+          done
+      - name: shellcheck
+        # Informational severity gate: the scripts are heavily commented operational
+        # tooling; fail only on real errors.
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq shellcheck
+          shellcheck --severity=error scripts/*.sh scripts/lib/*.sh guest-agent/build.sh
+
+  analysis:
+    name: Python analysis scripts
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: compile
+        run: python -m py_compile analysis/*.py scripts/traj-to-episode.py
