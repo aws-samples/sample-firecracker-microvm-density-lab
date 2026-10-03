@@ -94,26 +94,24 @@ Orchestrating many such hosts is a production concern, discussed below.
 | [`examples/`](examples/) | Mixed | Example workloads and an end-to-end integration test |
 | [`analysis/`](analysis/) | Python | Post-processing that turns sweep CSVs into throughput and completion tables |
 
-### Where the interesting work lives
+### What each component is responsible for
 
-The division matters, because the density-critical logic is not in the deployment layer.
+- **`cdk/`** provisions lab infrastructure only: VPC, IAM, the results bucket, and one metal
+  reference host from the golden AMI.
+- **`scripts/`** bakes the host image. Settings that need a reboot (host kernel command line,
+  KVM module parameters, disabling swap and KSM) belong in the AMI.
+- **`host-agent/`** handles what cannot be baked. NUMA topology is only known once the process
+  runs on the hardware, so topology discovery, cpuset allocation, cgroup partitions, the warm
+  pool, and metrics all happen at runtime.
+- **`guest-agent/`** runs inside every microVM as PID 1, so it is kept small and carries no
+  language runtime.
+- **`lab/`** and **`analysis/`** measure and interpret: the sweep harness runs placement
+  configurations across densities, and the analysis scripts turn the raw CSVs into throughput
+  and completion figures.
 
-- **`cdk/` provisions lab infrastructure only** — VPC, IAM, the results bucket, and one metal
-  reference host from the golden AMI. Nothing density-critical is here.
-- **`scripts/` bakes the host image** — settings that need a reboot (host kernel command line,
-  KVM module parameters, hugepage reservation, disabling swap and KSM) belong in the AMI.
-- **`host-agent/` does what cannot be baked** — NUMA topology is not knowable until the process
-  runs on real hardware, so topology discovery, cpuset allocation, cgroup partition setup, warm
-  pool management, and metrics all happen at runtime.
-- **`guest-agent/` runs inside every microVM** — it is resident in all of them and lands in every
-  snapshot, so it is deliberately small and carries no language runtime.
-- **`lab/` and `analysis/` measure and interpret** — the sweep harness runs placement
-  configurations across densities; the analysis scripts turn the raw CSVs into the units a
-  workload owner can act on.
-
-`host-agent/` and `lab/` intentionally share code: the Host Agent imports the `lab/` `topology`,
-`placement`, `launcher`, and `firecracker` packages via a Go `replace` directive rather than
-forking them, so the agent runs the exact code the lab validated.
+`host-agent/` imports the `lab/` `topology`, `placement`, `launcher`, and `firecracker` packages
+through a Go `replace` directive rather than copying them, so the agent runs the same code the
+lab validated.
 
 ## Instance types
 
@@ -199,41 +197,32 @@ converting workload containers to rootfs images
 
 ## Production deployment
 
-The lab measures one host; production runs many. This section describes how the pieces in this
-repository are intended to land in a production EKS environment — as the architecture diagram
-shows — using [Karpenter](https://karpenter.sh/) to manage the metal capacity. **This is
-guidance, not code in this repository.**
+In production, [Karpenter](https://karpenter.sh/) provisions the metal nodes and the Host Agent
+runs on each as a DaemonSet. This section is guidance only; the EKS layer is not shipped as code.
 
-- **Node provisioning: a Karpenter metal node pool.** Define a Karpenter `NodePool` restricted
-  to the supported metal SKUs, backed by an `EC2NodeClass` whose `amiSelectorTerms` select your
-  golden AMI (for example by the `LabAmi=true` / `BakedFrom=<instance-type>` tags the bake
-  applies). Nodes then join the cluster already carrying the pinned Firecracker, jailer, guest
-  kernel, and host settings — the same no-reboot-on-arrival property the lab host has. Because
-  AMIs are per-SKU, use one `EC2NodeClass` per instance type. Taint the pool (for example
-  `firecracker.aws-samples.com/sandbox=true:NoSchedule`) so ordinary workloads never land on
+- **Node pool.** Define a Karpenter `NodePool` restricted to the supported metal SKUs, backed by
+  one `EC2NodeClass` per instance type whose `amiSelectorTerms` select your golden AMI (the bake
+  tags it `LabAmi=true` / `BakedFrom=<instance-type>`). Taint the pool, for example
+  `firecracker.aws-samples.com/sandbox=true:NoSchedule`, so ordinary workloads never land on
   sandbox hosts.
-- **Base image note:** a node that joins EKS must be baked **on top of the EKS-optimized AMI**
-  for your cluster's Kubernetes version (so it carries kubelet/containerd/nodeadm), with the
-  `scripts/` provisioning applied on top. The lab AMI in this repo starts from stock Amazon
-  Linux 2023 instead, because the lab host does not join a cluster. Plan to re-bake when you
-  upgrade Kubernetes minor versions.
-- **Host Agent as a DaemonSet.** Package `host-agent/` into a container image and run it as a
-  DaemonSet targeting the metal node pool (node selector on the pool label, toleration for the
-  sandbox taint). The pod must be **privileged** with **hostPID** and mount `/sys/fs/cgroup`
-  (read-write, to own the cpuset partition tree — not delegatable to an unprivileged container),
-  `/srv/jailer`, and `/opt/firecracker` (read-only). Give it a generous
-  `terminationGracePeriodSeconds` (60s) so it can drain the warm pool and tear down cgroups on
-  node scale-in. The same flags documented in
+- **Base image.** Bake the production AMI on top of the EKS-optimized AMI for your cluster's
+  Kubernetes version so it carries kubelet, containerd and nodeadm, then apply the `scripts/`
+  provisioning. The lab AMI starts from stock Amazon Linux 2023 because the lab host never joins
+  a cluster. Re-bake on each Kubernetes minor upgrade.
+- **Host Agent.** Package `host-agent/` as a container image and run it as a DaemonSet on the
+  pool (node selector on the pool label, toleration for the taint). The pod must be privileged
+  with `hostPID`, and mount `/sys/fs/cgroup` read-write (the cpuset partition tree cannot be
+  delegated to an unprivileged container), `/srv/jailer`, and `/opt/firecracker` read-only. Set
+  `terminationGracePeriodSeconds` to 60s so it can drain the warm pool on scale-in. The flags in
   [`host-agent/README.md`](host-agent/README.md) apply unchanged.
-- **Sizing and consolidation.** Feed the sweep's chosen configuration and density into the
-  DaemonSet flags. Disable Karpenter consolidation for the pool or set generous disruption
-  budgets: a metal node running hundreds of active sandboxes is expensive to drain, and bare
-  metal launch times (minutes) make churn costly.
-- **Observability.** The agent serves Prometheus metrics; scrape them with your cluster's
-  Prometheus stack (the DaemonSet pod annotations pattern or a `ServiceMonitor`).
-- **Dispatch.** The warm pool is consumed via the agent's dispatch interface
-  (`examples/dispatch/` shows the vsock client side). The off-host scheduler/state manager that
-  routes rollout requests to nodes remains out of scope, as below.
+- **Sizing.** Pass the configuration and density the sweep selected as DaemonSet flags. Disable
+  Karpenter consolidation for the pool or set generous disruption budgets: draining a node that
+  runs hundreds of sandboxes is slow, and metal instances take minutes to launch.
+- **Observability.** Scrape the agent's Prometheus endpoint with your cluster's Prometheus stack
+  (pod annotations or a `ServiceMonitor`).
+- **Dispatch.** Consume the warm pool through the agent's dispatch interface;
+  `examples/dispatch/` shows the vsock client. The off-host scheduler that routes rollout requests
+  to nodes is out of scope.
 
 ## Scope
 
